@@ -1,0 +1,118 @@
+trigger:
+  branches:
+    include:
+      - none
+
+variables:
+  solution: '**/*.sln'
+  buildPlatform: 'Any CPU'
+  buildConfiguration: 'Release'
+
+stages:
+- stage: BuildAndPublish
+
+  jobs:
+  - job: BuildAndPublish
+    displayName: 'Build and Publish Job'
+    pool:
+      vmImage: 'windows-latest'
+
+    steps:
+    - task: NuGetToolInstaller@1
+      displayName: 'Install .NET'
+
+    - task: NuGetCommand@2
+      displayName: 'Restore Dependencies'
+      inputs:
+        command: 'restore'
+        restoreSolution: '$(solution)'
+        feedsToUse: 'config'
+        nugetConfigPath: 'nuget.config'
+
+    - task: VSBuild@1
+      displayName: 'Build Solution'
+      inputs:
+        solution: '$(solution)'
+        msbuildArgs: '/p:DeployOnBuild=true /p:WebPublishMethod=Package /p:PackageAsSingleFile=true /p:SkipInvalidConfigurations=true /p:PackageLocation="$(build.artifactStagingDirectory)"'
+        platform: '$(buildPlatform)'
+        configuration: '$(buildConfiguration)'
+
+    - task: VSTest@2
+      displayName: 'Testing'
+      inputs:
+        platform: '$(buildPlatform)'
+        configuration: '$(buildConfiguration)'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Publish'
+      inputs:
+        command: publish
+        publishWebProjects: True
+        arguments: '--configuration $(BuildConfiguration) --output $(build.artifactstagingdirectory)'
+        zipAfterPublish: True
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Artifact'
+      inputs:
+        PathtoPublish: '$(build.artifactstagingdirectory)'
+        artifactName: 'drop'
+      condition: succeededOrFailed()
+  
+- stage: DeployDEV
+  displayName: 'Deploy Web App to DEV'
+  dependsOn: BuildAndPublish
+  jobs:
+    - job: DeployToDevJob
+      displayName: 'Deploy to DEV'
+      pool: 
+        vmImage: 'windows-latest'
+      steps:        
+        - task: AzureWebApp@1
+          inputs:
+            azureSubscription: 'Azure subscription 1 (98134baf-b89e-45c5-9c70-1c40e593e6db)'
+            appType: 'webApp'
+            appName: 'app-frontend-ratecalls-dev-nsure-01'
+            package: '$(System.DefaultWorkingDirectory)/'
+            deploymentMethod: 'auto'
+            
+- stage: DeployTEST
+  displayName: 'Deploy Web App to TEST'
+  dependsOn: BuildAndPublish
+  jobs:
+    - deployment: DeployToTESTJob
+      displayName: 'Deploy to TEST'
+      pool:
+        vmImage: 'windows-latest'
+      environment: 'TEST environment'
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+              - task: AzureWebApp@1
+                inputs:
+                  azureSubscription: 'Azure subscription 1 (98134baf-b89e-45c5-9c70-1c40e593e6db)'
+                  appType: 'webApp'
+                  appName: 'app-frontend-ratecalls-tst-nsure-01'
+                  package: '$(System.DefaultWorkingDirectory)/'
+                  deploymentMethod: 'auto'
+        
+- stage: DeployPROD
+  displayName: 'Deploy Web App to PROD'
+  dependsOn: DeployTEST
+  jobs:
+    - deployment: DeployToPRODJob
+      displayName: 'Deploy to PROD'
+      pool:
+        vmImage: 'windows-latest'
+      environment: 'PROD environment'
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+              - task: AzureWebApp@1
+                inputs:
+                  azureSubscription: 'Azure subscription 1 (98134baf-b89e-45c5-9c70-1c40e593e6db)'
+                  appType: 'webApp'
+                  appName: 'app-frontend-ratecalls-tst-nsure-01'
+                  package: '$(System.DefaultWorkingDirectory)/'
+                  deploymentMethod: 'auto'
